@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fusion 360 to JLCPCB Converter</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .file-drop-area {
+            transition: background-color 0.2s ease-in-out, border-color 0.2s ease-in-out;
+        }
+        .file-drop-area.dragover {
+            background-color: #e0f2fe;
+            border-color: #38bdf8;
+        }
+        .spinner {
+            border-top-color: #3498db;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div class="container mx-auto p-4 sm:p-6 md:p-8 max-w-4xl">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl sm:text-4xl font-bold text-gray-900">Fusion 360 to JLCPCB Converter</h1>
+            <p class="mt-2 text-md sm:text-lg text-gray-600">A simple tool to convert BOM and CPL files from Autodesk Fusion 360 to the format required by JLCPCB.</p>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <!-- BOM Converter Card -->
+            <div class="bg-white p-6 rounded-xl shadow-md">
+                <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">BOM Converter</h2>
+                <div id="bom-drop-area" class="file-drop-area border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:bg-gray-50">
+                    <input type="file" id="bom-file-input" class="hidden" accept=".csv">
+                    <p id="bom-file-name" class="text-gray-500">Drag & drop your BOM CSV file here, or click to select.</p>
+                </div>
+                <button id="convert-bom-btn" class="w-full bg-blue-600 text-white font-bold py-3 px-4 rounded-lg mt-4 hover:bg-blue-700 transition-colors disabled:bg-gray-400" disabled>Convert BOM</button>
+            </div>
+
+            <!-- CPL Converter Card -->
+            <div class="bg-white p-6 rounded-xl shadow-md">
+                <h2 class="text-2xl font-semibold mb-4 text-gray-800 border-b pb-2">CPL Converter</h2>
+                <div id="cpl-drop-area" class="file-drop-area border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:bg-gray-50">
+                    <input type="file" id="cpl-file-input" class="hidden" accept=".csv" multiple>
+                    <p id="cpl-file-name" class="text-gray-500">Drag & drop CPL file(s) here<br>(e.g., *_front.csv, *_back.csv)</p>
+                </div>
+                <button id="convert-cpl-btn" class="w-full bg-green-600 text-white font-bold py-3 px-4 rounded-lg mt-4 hover:bg-green-700 transition-colors disabled:bg-gray-400" disabled>Convert CPL</button>
+            </div>
+        </div>
+        
+        <!-- Message Area -->
+        <div id="message-area" class="mt-8 text-center"></div>
+
+    </div>
+
+    <script>
+        // --- File Drop Area Logic ---
+        function setupFileDropArea(areaId, inputId, nameId, buttonId, isMultiple) {
+            const dropArea = document.getElementById(areaId);
+            const fileInput = document.getElementById(inputId);
+            const fileNameDisplay = document.getElementById(nameId);
+            const convertBtn = document.getElementById(buttonId);
+
+            dropArea.addEventListener('click', () => fileInput.click());
+            
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, preventDefaults, false);
+            });
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropArea.addEventListener(eventName, () => dropArea.classList.add('dragover'), false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, () => dropArea.classList.remove('dragover'), false);
+            });
+
+            dropArea.addEventListener('drop', (e) => {
+                fileInput.files = e.dataTransfer.files;
+                handleFiles(fileInput.files);
+            }, false);
+
+            fileInput.addEventListener('change', () => {
+                handleFiles(fileInput.files);
+            });
+
+            function handleFiles(files) {
+                if (files.length > 0) {
+                    if (isMultiple) {
+                        fileNameDisplay.innerHTML = Array.from(files).map(f => f.name).join('<br>');
+                    } else {
+                        fileNameDisplay.textContent = files[0].name;
+                    }
+                    fileNameDisplay.classList.add('font-semibold', 'text-gray-700');
+                    convertBtn.disabled = false;
+                }
+            }
+        }
+
+        setupFileDropArea('bom-drop-area', 'bom-file-input', 'bom-file-name', 'convert-bom-btn', false);
+        setupFileDropArea('cpl-drop-area', 'cpl-file-input', 'cpl-file-name', 'convert-cpl-btn', true);
+
+        // --- Core Conversion Logic ---
+        const bomConvertBtn = document.getElementById('convert-bom-btn');
+        const cplConvertBtn = document.getElementById('convert-cpl-btn');
+        const messageArea = document.getElementById('message-area');
+
+        bomConvertBtn.addEventListener('click', () => {
+            const file = document.getElementById('bom-file-input').files[0];
+            if (file) {
+                processBOM(file);
+            }
+        });
+
+        cplConvertBtn.addEventListener('click', () => {
+            const files = document.getElementById('cpl-file-input').files;
+            if (files.length > 0) {
+                processCPL(files);
+            }
+        });
+
+        function showMessage(text, type = 'success') {
+            const color = type === 'success' ? 'green' : 'red';
+            messageArea.innerHTML = `<div class="bg-${color}-100 border border-${color}-400 text-${color}-700 px-4 py-3 rounded-lg relative" role="alert">
+                <span class="block sm:inline">${text}</span>
+            </div>`;
+            setTimeout(() => { messageArea.innerHTML = '' }, 5000);
+        }
+        
+        /**
+         * Parses CSV text into an array of objects.
+         * Handles quoted fields and different line endings.
+         */
+        function parseCSV(text) {
+            const lines = text.trim().replace(/\r\n/g, '\n').split('\n');
+            const header = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+            const rows = [];
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i]) continue;
+                const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+                if (values.length === header.length) {
+                    const row = {};
+                    for (let j = 0; j < header.length; j++) {
+                        row[header[j]] = values[j];
+                    }
+                    rows.push(row);
+                }
+            }
+            return rows;
+        }
+
+        /**
+         * Converts an array of objects to CSV text.
+         */
+        function toCSV(data, headers) {
+            const headerRow = headers.join(',');
+            const rows = data.map(row => 
+                headers.map(header => `"${row[header] || ''}"`).join(',')
+            );
+            return [headerRow, ...rows].join('\n');
+        }
+
+        function processBOM(file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const text = e.target.result;
+                    const data = parseCSV(text);
+
+                    // New Mapping: "Part" -> "Designator", "Value" -> "Comment", "Package" -> "Footprint"
+                    // New Headers: "Designator", "Comment", "Footprint", "LCSC Part #"
+                    
+                    const jlcData = data.map(row => ({
+                        'Designator': row['Part'] || '',
+                        'Comment': row['Value'] || '',
+                        'Footprint': row['Package'] || '',
+                        'LCSC Part #': '' // This field is added as requested
+                    }));
+                    
+                    const jlcHeaders = ["Designator", "Comment", "Footprint", "LCSC Part #"];
+                    const csvContent = toCSV(jlcData, jlcHeaders);
+
+                    const baseName = file.name.replace(/\.csv$/i, '');
+                    const newFileName = `jlcpcb_bom_${baseName}.csv`;
+
+                    downloadCSV(csvContent, newFileName);
+                    showMessage('BOM file converted successfully!', 'success');
+                } catch (error) {
+                    console.error("Error processing BOM:", error);
+                    showMessage('Failed to process BOM file. Please check the file format.', 'error');
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        async function processCPL(files) {
+            let combinedData = [];
+            const fileReadPromises = [];
+
+            for (const file of files) {
+                const promise = new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        try {
+                            const text = e.target.result;
+                            const data = parseCSV(text);
+                            
+                            let layer;
+                            if (file.name.toLowerCase().endsWith('_front.csv')) {
+                                layer = 'Top';
+                            } else if (file.name.toLowerCase().endsWith('_back.csv')) {
+                                layer = 'Bottom';
+                            } else {
+                                // Default to Top if filename doesn't match, or handle as an error
+                                layer = 'Top'; 
+                                console.warn(`Filename ${file.name} doesn't end with _front.csv or _back.csv. Defaulting layer to Top.`);
+                            }
+
+                            // New Mapping: "Name" -> "Designator", "X" -> "Mid X", "Y" -> "Mid Y", "Angle" -> "Rotation"
+                            // New Headers: "Designator", "Mid X", "Mid Y", "Layer", "Rotation", "LCSC Part Number"
+                            const jlcData = data.map(row => ({
+                                'Designator': row['Name'] || '',
+                                'Mid X': row['X'] || '',
+                                'Mid Y': row['Y'] || '',
+                                'Layer': layer,
+                                'Rotation': row['Angle'] || '0',
+                                'LCSC Part Number': '' // This field is added as requested
+                            }));
+                            resolve(jlcData);
+                        } catch (err) {
+                            reject(err);
+                        }
+                    };
+                    reader.onerror = reject;
+                    reader.readAsText(file);
+                });
+                fileReadPromises.push(promise);
+            }
+
+            try {
+                const results = await Promise.all(fileReadPromises);
+                results.forEach(data => {
+                    combinedData = combinedData.concat(data);
+                });
+
+                if (combinedData.length === 0) {
+                    showMessage('No valid data found in the CPL file(s). Please check the content.', 'error');
+                    return;
+                }
+
+                const jlcHeaders = ["Designator", "Mid X", "Mid Y", "Layer", "Rotation", "LCSC Part Number"];
+                const csvContent = toCSV(combinedData, jlcHeaders);
+                
+                // Create a base name from the first file, stripping suffixes
+                const baseName = files[0].name.replace(/_?(front|back)\.csv$/i, '');
+                const newFileName = `jlcpcb_cpl_${baseName}.csv`;
+                
+                downloadCSV(csvContent, newFileName);
+                showMessage('CPL file(s) converted and combined successfully!', 'success');
+
+            } catch (error) {
+                console.error("Error processing CPL files:", error);
+                showMessage('Failed to process one or more CPL files. Please check the file formats.', 'error');
+            }
+        }
+
+        function downloadCSV(content, fileName) {
+            const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", fileName);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    </script>
+</body>
+</html>
